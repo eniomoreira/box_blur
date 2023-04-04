@@ -13,7 +13,7 @@
 using namespace std;
 
 // CONSTANTS
-static const string INPUT_DIRECTORY = "input";
+static const string INPUT_DIRECTORY = "../input";
 static const string OUTPUT_DIRECTORY = "output";
 static const int FILTER_SIZE = 5;
 static const int NUM_CHANNELS = 3;
@@ -135,5 +135,6 @@ int main(int argc, char *argv[])
     auto end_time = chrono::high_resolution_clock::now();
     auto elapsed_time = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
     cout << "Elapsed time: " << elapsed_time.count() << " ms" << endl;
+    // Edklajsdkljasdklas
     return 0;
 }
