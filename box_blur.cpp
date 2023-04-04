@@ -89,7 +89,13 @@ single_channel_image_t apply_box_blur(const single_channel_image_t &image, const
     // Calculate the padding size for the filter
     int pad = filter_size / 2;
 
-    // YOUR CODE HERE
+    for (int i = pad; i<height-pad; i++)
+    {
+        for (int j = pad; j<width-pad; j++)
+        {
+            int sum = 0;
+        }
+    }
 
     return result;
 }
