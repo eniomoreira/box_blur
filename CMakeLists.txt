@@ -21,3 +21,5 @@ project(box_blur)
 set(SOURCE box_blur.cpp)
 
 add_executable(${PROJECT_NAME} ${SOURCE})
+
+set_target_properties(${PROJECT_NAME} PROPERTIES LINK_LIBRARIES -pthread)

@@ -1,3 +1,6 @@
+#include <condition_variable>
+#include <cassert>
+#include <mutex>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -13,15 +16,52 @@
 using namespace std;
 
 // CONSTANTS
+static const unsigned NUM_CONSUMERS = 10;
+static const unsigned NUM_PRODUCERS = 1;
+// A thread podutora é a propria main
+
 static const string INPUT_DIRECTORY = "../input";
 static const string OUTPUT_DIRECTORY = "output";
 static const int FILTER_SIZE = 5;
 static const int NUM_CHANNELS = 3;
 
+// Mutex para proteger os recursos compartilhados
+std::mutex m;
+// Vari�vel de condi��o que indica que existe espa�o dispon�vel no buffer
+// O consumidor utiliza essa vari�vel de condi��o para notificar o produtor que a fila n�o est� cheia
+std::condition_variable space_available;
+// Vari�vel de condi��o que indica que existem dados dispon�veis no buffer
+// O produtor utiliza essa vari�vel de condi��o para notificar o consumidor que a fila n�o est� vazia
+std::condition_variable data_available;
+
+// Buffer para amarzenar o nome dos arquivos
+static const unsigned BUFFER_SIZE = 11;
+std::string buffer[BUFFER_SIZE];
+
 // Image type definition
 typedef vector<vector<uint8_t>> single_channel_image_t;
 typedef array<single_channel_image_t, NUM_CHANNELS> image_t;
 
+//  =========================  Circular buffer  ============================================
+// C�digo que implementa um buffer circular
+static unsigned counter = 0;
+unsigned in = 0, out = 0;
+void add_buffer(string file_name)
+{
+  buffer[in] = file_name;
+  in = (in+1) % BUFFER_SIZE;
+  counter++;
+}
+
+string get_buffer()
+{
+  std::string v;
+  v = buffer[out];
+  out = (out+1) % BUFFER_SIZE;
+  counter--;
+  return v;
+}
+//  ==========================================================================================
 image_t load_image(const string &filename)
 {
     int width, height, channels;
@@ -126,8 +166,64 @@ single_channel_image_t apply_box_blur(const single_channel_image_t &image, const
     return result;
 }
 
-int main(int argc, char *argv[])
+void producer_func(const unsigned id)
 {
+    for (auto &file : filesystem::directory_iterator{INPUT_DIRECTORY})
+    {
+        // Cria um objeto do tipo unique_lock que no construtor chama m.lock()
+        std::unique_lock<std::mutex> lock(m);
+
+        while (counter == BUFFER_SIZE)
+		{			
+			space_available.wait(lock); // Espera por espa�o dispon�vel 
+			// Lembre-se que a fun��o wait() invoca m.unlock() antes de colocar a thread em estado de espera para que o consumidor consiga adquirir a posse do mutex m	e consumir dados
+			// Quando a thread � acordada, a fun��o wait() invoca m.lock() retomando a posse do mutex m
+		}
+        string input_image_path = file.path().string();
+        add_buffer(input_image_path);
+        data_available.notify_one();
+
+    }
+}
+
+void consumer_func(const unsigned id)
+{
+	while (true)
+	{
+		// Cria um objeto do tipo unique_lock que no construtor chama m.lock()
+		std::unique_lock<std::mutex> lock(m);
+		
+		// Verifica se o buffer est� vazio e, caso afirmativo, espera notifica��o de "dado dispon�vel no buffer"
+		while (counter == 0)
+		{
+			data_available.wait(lock); // Espera por dado dispon�vel
+			// Lembre-se que a fun��o wait() invoca m.unlock() antes de colocar a thread em estado de espera para que o produtor consiga adquirir a posse do mutex m e produzir dados
+			// Quando a thread � acordada, a fun��o wait() invoca m.lock() retomando a posse do mutex m
+		}
+
+		// O buffer n�o est� mais vazio, ent�o consome um elemento
+
+		string file_name = get_buffer();
+		std::cout << "Consumer " << id << " - consumed: " << file_name << " - Buffer counter: " << counter << std::endl;
+        image_t input_image = load_image(file_name);
+        image_t output_image;
+        clog << "Processing image: " << file_name << endl;
+        for (int i = 0; i < NUM_CHANNELS; ++i)
+        {
+            output_image[i] = apply_box_blur(input_image[i], FILTER_SIZE);
+        }
+        string output_image_path = file_name.replace(file_name.find(INPUT_DIRECTORY), INPUT_DIRECTORY.length(), OUTPUT_DIRECTORY);
+        write_image(output_image_path, output_image);
+		space_available.notify_one();
+		assert(counter >= 0);
+	}  // Fim de escopo -> o objeto lock ser� destru�do e invocar� m.unlock(), liberando o mutex m
+}
+
+int main(int argc, char *argv[])
+
+{
+    std::vector<std::thread> producers;
+	std::vector<std::thread> consumers;
     if (!filesystem::exists(INPUT_DIRECTORY))
     {
         cerr << "Error, " << INPUT_DIRECTORY << " directory does not exist" << endl;
@@ -151,22 +247,20 @@ int main(int argc, char *argv[])
 
     cerr << "Error, there is a file named " << OUTPUT_DIRECTORY << ", it should be a directory";
     auto start_time = chrono::high_resolution_clock::now();
-    for (auto &file : filesystem::directory_iterator{INPUT_DIRECTORY})
-    {
-        string input_image_path = file.path().string();
-        clog << "Processing image: " << input_image_path << endl;
-        image_t input_image = load_image(input_image_path);
-        image_t output_image;
-        for (int i = 0; i < NUM_CHANNELS; ++i)
-        {
-            output_image[i] = apply_box_blur(input_image[i], FILTER_SIZE);
-        }
-        string output_image_path = input_image_path.replace(input_image_path.find(INPUT_DIRECTORY), INPUT_DIRECTORY.length(), OUTPUT_DIRECTORY);
-        write_image(output_image_path, output_image);
-    }
-    auto end_time = chrono::high_resolution_clock::now();
+
+    for (unsigned i =0; i < NUM_PRODUCERS; ++i)
+	{
+		producers.push_back(std::thread(producer_func, i));
+	}
+	for (unsigned i =0; i < NUM_CONSUMERS; ++i)
+	{
+		consumers.push_back(std::thread(consumer_func, i));
+	}
+
+	consumers[0].join();
+    /*auto end_time = chrono::high_resolution_clock::now();
     auto elapsed_time = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
-    cout << "Elapsed time: " << elapsed_time.count() << " ms" << endl;
+    cout << "Elapsed time: " << elapsed_time.count() << " ms" << endl;*/
     // Edklajsdkljasdklas
     return 0;
 }
